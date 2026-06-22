@@ -11,80 +11,92 @@ const DELAY_MS = 1500;
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// ─── SA detection ────────────────────────────────────────────────────────────
+// ─── SA keyword searches (no category sweeps) ────────────────────────────────
 
-const SA_TEXT_TERMS = [
-  'south africa', 'south african', 'johannesburg', 'cape town',
-  'eskom', 'sars', 'load shed', 'loadshedding', 'load shedding',
-  'cipc', 'braai', 'spaza'
+const KEYWORDS = [
+  'South Africa',
+  'South African',
+  'load shedding',
+  'eskom',
+  'SARS eFiling',
+  'South Africa app',
+  'SA business',
+  'Johannesburg app',
+  'Cape Town app',
+  'loadshedding',
+  'CIPC',
+  'spaza shop'
 ];
 
-function isSABuilt(app) {
-  const website = (app.developerWebsite || '').toLowerCase();
-  const email = (app.developerEmail || '').toLowerCase();
-  const desc = (app.description || '').toLowerCase();
-  const title = (app.title || '').toLowerCase();
+// ─── Pre-filter: skip obvious global brands before detail fetch ───────────────
 
-  if (website.includes('.co.za') || email.includes('.co.za')) return true;
+const GLOBAL_APPID_PREFIXES = [
+  'com.google', 'com.facebook', 'com.meta', 'com.microsoft', 'com.amazon',
+  'com.netflix', 'com.spotify', 'com.uber', 'com.twitter', 'com.x.android',
+  'com.instagram', 'com.whatsapp', 'com.zhiliaoapp', 'com.tiktok',
+  'com.snapchat', 'com.linkedin', 'com.discord', 'com.telegram',
+  'com.apple', 'com.samsung', 'com.huawei', 'com.xiaomi',
+  'com.temu', 'com.shein', 'com.aliexpress', 'com.ebay', 'com.paypal',
+  'com.adobe', 'com.dropbox', 'com.slack', 'com.airbnb', 'com.booking',
+  'com.tripadvisor', 'com.duolingo', 'com.king', 'com.supercell',
+  'com.rovio', 'com.roblox', 'com.mojang'
+];
 
-  for (const term of SA_TEXT_TERMS) {
-    if (desc.includes(term) || title.includes(term)) return true;
+const GLOBAL_TITLE_KEYWORDS = [
+  'zoom', 'facebook', 'whatsapp', 'instagram', 'tiktok', 'netflix',
+  'youtube', 'spotify', 'uber', 'amazon', 'microsoft', 'google',
+  'snapchat', 'twitter', 'discord', 'telegram', 'linkedin',
+  'temu', 'shein', 'aliexpress', 'roblox', 'minecraft', 'candy crush',
+  'subway surfers', 'clash of clans', 'clash royale', 'pubg', 'fortnite'
+];
+
+function isGlobalBrand(appId, title) {
+  const appIdLower = appId.toLowerCase();
+  const titleLower = title.toLowerCase();
+
+  for (const prefix of GLOBAL_APPID_PREFIXES) {
+    if (appIdLower.startsWith(prefix)) return true;
+  }
+
+  for (const kw of GLOBAL_TITLE_KEYWORDS) {
+    if (titleLower.includes(kw)) return true;
   }
 
   return false;
 }
 
-// ─── Phase 1: Category sweeps ────────────────────────────────────────────────
+// ─── SA detection (post-detail-fetch) ────────────────────────────────────────
 
-const CATEGORIES = [
-  'BUSINESS', 'FINANCE', 'TOOLS', 'PRODUCTIVITY', 'LIFESTYLE',
-  'SHOPPING', 'FOOD_AND_DRINK', 'HEALTH_AND_FITNESS', 'EDUCATION',
-  'ENTERTAINMENT', 'NEWS_AND_MAGAZINES', 'SOCIAL', 'MAPS_AND_NAVIGATION',
-  'TRAVEL_AND_LOCAL'
+const SA_TEXT_TERMS = [
+  'south africa', 'south african', 'johannesburg', 'cape town',
+  'eskom', 'sars', 'load shedding', 'loadshedding', 'load shed',
+  'cipc', 'braai', 'spaza', 'pretoria', 'durban', 'soweto'
 ];
 
-async function fetchCategoryApps(allIds) {
-  console.log('\n=== Phase 1: Google Play category sweeps ===');
+function getSASignal(app) {
+  const website = (app.developerWebsite || '').toLowerCase();
+  const email = (app.developerEmail || '').toLowerCase();
 
-  for (const cat of CATEGORIES) {
-    console.log(`  📂 ${cat}...`);
-    try {
-      const results = await gplay.list({
-        category: gplay.category[cat],
-        collection: gplay.collection.TOP_FREE,
-        country: 'za',
-        lang: 'en',
-        num: 100
-      });
-      const before = allIds.size;
-      results.forEach(a => allIds.add(a.appId));
-      console.log(`     ${results.length} fetched, +${allIds.size - before} new (total: ${allIds.size})`);
-    } catch (err) {
-      console.error(`  ❌ ${cat}: ${err.message}`);
-    }
-    await delay(DELAY_MS);
+  // Strongest signal: .co.za domain
+  if (website.includes('.co.za') || email.includes('.co.za')) return 'domain';
+
+  const desc = (app.description || '').toLowerCase();
+  const title = (app.title || '').toLowerCase();
+
+  for (const term of SA_TEXT_TERMS) {
+    if (desc.includes(term) || title.includes(term)) return 'text';
   }
+
+  return 'none';
 }
 
-// ─── Phase 2: Keyword searches ───────────────────────────────────────────────
+// ─── Phase 1: Keyword searches → collect candidate appIds ────────────────────
 
-const KEYWORDS = [
-  'South Africa',
-  'South African app',
-  'Johannesburg',
-  'Cape Town',
-  'load shedding',
-  'loadshedding',
-  'eskom',
-  'SARS',
-  'CIPC',
-  'rand pay',
-  'braai',
-  'spaza'
-];
+async function collectCandidates() {
+  console.log('\n=== Phase 1: SA keyword searches ===');
 
-async function fetchKeywordApps(allIds) {
-  console.log('\n=== Phase 2: Google Play keyword searches ===');
+  const candidates = new Map(); // appId → { appId, title }
+  let skipped = 0;
 
   for (const kw of KEYWORDS) {
     console.log(`  🔍 "${kw}"...`);
@@ -95,26 +107,39 @@ async function fetchKeywordApps(allIds) {
         lang: 'en',
         num: 250
       });
-      const before = allIds.size;
-      results.forEach(a => allIds.add(a.appId));
-      console.log(`     ${results.length} results, +${allIds.size - before} new (total: ${allIds.size})`);
+
+      let added = 0;
+      for (const app of results) {
+        if (candidates.has(app.appId)) continue;
+        if (isGlobalBrand(app.appId, app.title)) {
+          skipped++;
+          continue;
+        }
+        candidates.set(app.appId, { appId: app.appId, title: app.title });
+        added++;
+      }
+
+      console.log(`     ${results.length} results → +${added} new candidates (${skipped} global brands skipped)`);
     } catch (err) {
       console.error(`  ❌ "${kw}": ${err.message}`);
     }
     await delay(DELAY_MS);
   }
+
+  console.log(`\n  📊 Total candidates for detail fetch: ${candidates.size} (skipped ${skipped} global brands)`);
+  return [...candidates.values()];
 }
 
-// ─── Phase 3: Detail fetch ───────────────────────────────────────────────────
+// ─── Phase 2: Detail fetch for candidates only ───────────────────────────────
 
-async function fetchPlayDetails(appIds) {
-  console.log(`\n=== Phase 3: Fetching details for ${appIds.length} apps ===`);
+async function fetchDetails(candidates) {
+  console.log(`\n=== Phase 2: Detail fetch (${candidates.length} apps) ===`);
   const apps = [];
 
-  for (let i = 0; i < appIds.length; i++) {
-    const appId = appIds[i];
-    if ((i + 1) % 10 === 0 || i === 0) {
-      console.log(`  📱 [${i + 1}/${appIds.length}] ${appId}`);
+  for (let i = 0; i < candidates.length; i++) {
+    const { appId, title } = candidates[i];
+    if ((i + 1) % 20 === 0 || i === 0 || i === candidates.length - 1) {
+      console.log(`  📱 [${i + 1}/${candidates.length}] ${appId}`);
     }
     try {
       const detail = await gplay.app({ appId, country: 'za', lang: 'en' });
@@ -125,36 +150,31 @@ async function fetchPlayDetails(appIds) {
     await delay(DELAY_MS);
   }
 
+  console.log(`  ✓ Fetched details for ${apps.length}/${candidates.length} apps`);
   return apps;
 }
 
-// ─── Phase 4: App Store bonus ─────────────────────────────────────────────────
+// ─── Phase 3: App Store bonus ─────────────────────────────────────────────────
 
-const APPSTORE_KEYWORDS = [
-  'South Africa', 'load shedding', 'eskom', 'SARS'
-];
+const APPSTORE_KEYWORDS = ['South Africa', 'load shedding', 'eskom', 'SARS eFiling'];
 
-async function fetchAppStoreApps() {
-  console.log('\n=== Phase 4: App Store keyword bonus ===');
+async function fetchAppStoreBonus() {
+  console.log('\n=== Phase 3: App Store bonus ===');
   const appStoreApps = [];
   const seenIds = new Set();
 
   for (const kw of APPSTORE_KEYWORDS) {
     console.log(`  🍎 "${kw}"...`);
     try {
-      const results = await store.search({
-        term: kw,
-        country: 'za',
-        num: 100,
-        lang: 'en-za'
-      });
+      const results = await store.search({ term: kw, country: 'za', num: 100, lang: 'en-za' });
       for (const app of results) {
-        if (!seenIds.has(app.appId)) {
-          seenIds.add(app.appId);
+        const id = app.appId || String(app.id || '');
+        if (!seenIds.has(id) && !isGlobalBrand(id, app.title || '')) {
+          seenIds.add(id);
           appStoreApps.push(app);
         }
       }
-      console.log(`     ${results.length} results (App Store total: ${appStoreApps.length})`);
+      console.log(`     → App Store total: ${appStoreApps.length}`);
     } catch (err) {
       console.error(`  ❌ App Store "${kw}": ${err.message}`);
     }
@@ -167,6 +187,7 @@ async function fetchAppStoreApps() {
 // ─── Processing ───────────────────────────────────────────────────────────────
 
 function processPlayApp(app) {
+  const signal = getSASignal(app);
   return {
     source: 'google_play',
     appId: app.appId || '',
@@ -181,11 +202,19 @@ function processPlayApp(app) {
     description: (app.description || '').substring(0, 300),
     url: app.url || `https://play.google.com/store/apps/details?id=${app.appId}`,
     icon: app.icon || '',
-    likely_sa_built: isSABuilt(app) ? 'TRUE' : 'FALSE'
+    sa_signal: signal,
+    likely_sa_built: signal !== 'none' ? 'TRUE' : 'FALSE'
   };
 }
 
 function processAppStoreApp(app) {
+  const mockApp = {
+    developerWebsite: app.developerUrl || '',
+    developerEmail: '',
+    description: app.description || '',
+    title: app.title || ''
+  };
+  const signal = getSASignal(mockApp);
   return {
     source: 'app_store',
     appId: app.appId || String(app.id || ''),
@@ -200,12 +229,8 @@ function processAppStoreApp(app) {
     description: (app.description || '').substring(0, 300),
     url: app.url || '',
     icon: app.icon || '',
-    likely_sa_built: isSABuilt({
-      developerWebsite: app.developerUrl || '',
-      developerEmail: '',
-      description: app.description || '',
-      title: app.title || ''
-    }) ? 'TRUE' : 'FALSE'
+    sa_signal: signal,
+    likely_sa_built: signal !== 'none' ? 'TRUE' : 'FALSE'
   };
 }
 
@@ -225,13 +250,14 @@ const CSV_HEADERS = [
   { id: 'description', title: 'description' },
   { id: 'url', title: 'url' },
   { id: 'icon', title: 'icon' },
+  { id: 'sa_signal', title: 'sa_signal' },
   { id: 'likely_sa_built', title: 'likely_sa_built' }
 ];
 
+const SIGNAL_RANK = { domain: 0, text: 1, none: 2 };
+
 async function exportCSVs(allApps) {
-  if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  }
+  if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
   const rawWriter = createObjectCsvWriter({
     path: path.join(OUTPUT_DIR, 'za-apps-raw.csv'),
@@ -240,16 +266,24 @@ async function exportCSVs(allApps) {
   await rawWriter.writeRecords(allApps);
   console.log(`  ✅ za-apps-raw.csv — ${allApps.length} apps`);
 
+  // Sort SA apps: domain signal first, then text, then by ratings desc within each tier
   const saApps = allApps
     .filter(a => a.likely_sa_built === 'TRUE')
-    .sort((a, b) => (Number(b.ratings) || 0) - (Number(a.ratings) || 0));
+    .sort((a, b) => {
+      const rankDiff = SIGNAL_RANK[a.sa_signal] - SIGNAL_RANK[b.sa_signal];
+      if (rankDiff !== 0) return rankDiff;
+      return (Number(b.ratings) || 0) - (Number(a.ratings) || 0);
+    });
 
   const filteredWriter = createObjectCsvWriter({
     path: path.join(OUTPUT_DIR, 'za-apps-likely-sa.csv'),
     header: CSV_HEADERS
   });
   await filteredWriter.writeRecords(saApps);
-  console.log(`  ✅ za-apps-likely-sa.csv — ${saApps.length} likely SA-built`);
+
+  const domainCount = saApps.filter(a => a.sa_signal === 'domain').length;
+  const textCount = saApps.filter(a => a.sa_signal === 'text').length;
+  console.log(`  ✅ za-apps-likely-sa.csv — ${saApps.length} SA-built (${domainCount} domain, ${textCount} text)`);
 
   const devMap = new Map();
   for (const app of saApps) {
@@ -259,13 +293,24 @@ async function exportCSVs(allApps) {
         developer: app.developer,
         developerEmail: app.developerEmail,
         developerWebsite: app.developerWebsite,
-        appCount: 0
+        appCount: 0,
+        sa_signal: app.sa_signal
       });
     }
-    devMap.get(key).appCount++;
+    const entry = devMap.get(key);
+    entry.appCount++;
+    // Upgrade signal if this app has a stronger one
+    if (SIGNAL_RANK[app.sa_signal] < SIGNAL_RANK[entry.sa_signal]) {
+      entry.sa_signal = app.sa_signal;
+    }
   }
 
-  const contacts = [...devMap.values()].sort((a, b) => b.appCount - a.appCount);
+  const contacts = [...devMap.values()]
+    .sort((a, b) => {
+      const rankDiff = SIGNAL_RANK[a.sa_signal] - SIGNAL_RANK[b.sa_signal];
+      if (rankDiff !== 0) return rankDiff;
+      return b.appCount - a.appCount;
+    });
 
   const contactWriter = createObjectCsvWriter({
     path: path.join(OUTPUT_DIR, 'za-developer-contacts.csv'),
@@ -273,7 +318,8 @@ async function exportCSVs(allApps) {
       { id: 'developer', title: 'developer' },
       { id: 'developerEmail', title: 'developerEmail' },
       { id: 'developerWebsite', title: 'developerWebsite' },
-      { id: 'appCount', title: 'appCount' }
+      { id: 'appCount', title: 'appCount' },
+      { id: 'sa_signal', title: 'sa_signal' }
     ]
   });
   await contactWriter.writeRecords(contacts);
@@ -285,35 +331,29 @@ async function exportCSVs(allApps) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('🚀 Za-pps Seed Scraper starting...');
-  console.log('   Rate limit: 1.5s between requests. Expected runtime: 10–20 min.\n');
+  console.log('🚀 Za-pps Seed Scraper (v2 — keyword-first, pre-filtered)');
+  console.log('   Rate limit: 1.5s/request. Estimated runtime: 5–15 min.\n');
 
-  const playIds = new Set();
-
-  await fetchCategoryApps(playIds);
-  await fetchKeywordApps(playIds);
-
-  console.log(`\n📊 Unique Play Store apps to detail-fetch: ${playIds.size}`);
-
-  const rawPlayApps = await fetchPlayDetails([...playIds]);
+  const candidates = await collectCandidates();
+  const rawPlayApps = await fetchDetails(candidates);
   const playApps = rawPlayApps.map(processPlayApp);
 
-  const appStoreRaw = await fetchAppStoreApps();
-  const appStoreApps = appStoreRaw.map(processAppStoreApp);
+  const appStoreRaw = await fetchAppStoreBonus();
+  const playIds = new Set(playApps.map(a => a.appId));
+  const appStoreApps = appStoreRaw
+    .filter(a => !playIds.has(a.appId || String(a.id || '')))
+    .map(processAppStoreApp);
 
-  // Merge, deduplicate by appId (Play takes priority)
-  const seenAppIds = new Set(playApps.map(a => a.appId));
-  const uniqueAppStore = appStoreApps.filter(a => !seenAppIds.has(a.appId));
-
-  const allApps = [...playApps, ...uniqueAppStore];
-
+  const allApps = [...playApps, ...appStoreApps];
   const saCount = allApps.filter(a => a.likely_sa_built === 'TRUE').length;
-  console.log(`\n📊 Total: ${allApps.length} apps (${saCount} likely SA-built)`);
+  const domainCount = allApps.filter(a => a.sa_signal === 'domain').length;
+
+  console.log(`\n📊 ${allApps.length} total apps → ${saCount} likely SA-built (${domainCount} with .co.za domain)`);
 
   console.log('\n=== Exporting CSVs ===');
-  const exported = await exportCSVs(allApps);
+  await exportCSVs(allApps);
 
-  console.log(`\n✅ Done! ${allApps.length} raw apps → ${exported} SA-built → check ./output/`);
+  console.log('\n✅ Done. Check ./output/');
 }
 
 main().catch(err => {
