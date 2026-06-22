@@ -1,0 +1,15 @@
+{
+  "name": "za-pps-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scrapes Google Play for SA-built apps to seed the Za-pps directory",
+  "main": "scraper.js",
+  "scripts": {
+    "start": "node scraper.js"
+  },
+  "dependencies": {
+    "google-play-scraper": "latest",
+    "app-store-scraper": "latest",
+    "csv-writer": "latest"
+  }
+}
