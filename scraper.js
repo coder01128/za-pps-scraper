@@ -166,7 +166,7 @@ async function fetchAppStoreBonus() {
   for (const kw of APPSTORE_KEYWORDS) {
     console.log(`  🍎 "${kw}"...`);
     try {
-      const results = await store.search({ term: kw, country: 'za', num: 100, lang: 'en-za' });
+      const results = await store.search({ term: kw, country: 'za', num: 100 });
       for (const app of results) {
         const id = app.appId || String(app.id || '');
         if (!seenIds.has(id) && !isGlobalBrand(id, app.title || '')) {
@@ -176,7 +176,7 @@ async function fetchAppStoreBonus() {
       }
       console.log(`     → App Store total: ${appStoreApps.length}`);
     } catch (err) {
-      console.error(`  ❌ App Store "${kw}": ${err.message}`);
+      console.error(`  ❌ App Store "${kw}": ${err?.message || JSON.stringify(err)}`);
     }
     await delay(DELAY_MS);
   }
